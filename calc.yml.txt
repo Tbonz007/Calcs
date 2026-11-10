@@ -1,0 +1,789 @@
+name: Build Pocket Calc
+on:
+  push:
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create project files
+        run: |
+          mkdir -p app
+          cat > app/build.gradle.kts <<'KTEOF'
+          plugins {
+              id("com.android.application")
+              id("org.jetbrains.kotlin.android")
+          }
+
+          android {
+              namespace = "com.eddefi.calc"
+              compileSdk = 34
+              defaultConfig {
+                  applicationId = "com.eddefi.pocketcalc"
+                  minSdk = 26
+                  targetSdk = 34
+                  versionCode = 1
+                  versionName = "1.0"
+              }
+              buildTypes { release { isMinifyEnabled = false } }
+              compileOptions {
+                  sourceCompatibility = JavaVersion.VERSION_17
+                  targetCompatibility = JavaVersion.VERSION_17
+              }
+              kotlinOptions { jvmTarget = "17" }
+              buildFeatures { compose = true }
+              composeOptions { kotlinCompilerExtensionVersion = "1.5.14" }
+          }
+
+          dependencies {
+              implementation(platform("androidx.compose:compose-bom:2024.09.00"))
+              implementation("androidx.core:core-ktx:1.13.1")
+              implementation("androidx.activity:activity-compose:1.9.2")
+              implementation("androidx.compose.ui:ui")
+              implementation("androidx.compose.foundation:foundation")
+              implementation("androidx.compose.material3:material3")
+              implementation("androidx.compose.material:material-icons-extended")
+          }
+          KTEOF
+          mkdir -p app/src/main
+          cat > app/src/main/AndroidManifest.xml <<'KTEOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <application
+                  android:label="Pocket Calc"
+                  android:icon="@mipmap/ic_launcher"
+                  android:roundIcon="@mipmap/ic_launcher"
+                  android:theme="@style/AppTheme">
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          KTEOF
+          mkdir -p app/src/main/java/com/eddefi/calc
+          cat > app/src/main/java/com/eddefi/calc/CalcUi.kt <<'KTEOF'
+          package com.eddefi.calc
+
+          import android.app.Activity
+          import android.content.Context
+          import androidx.compose.animation.core.animateDpAsState
+          import androidx.compose.animation.core.tween
+          import androidx.compose.foundation.Canvas
+          import androidx.compose.foundation.background
+          import androidx.compose.foundation.border
+          import androidx.compose.foundation.clickable
+          import androidx.compose.foundation.interaction.MutableInteractionSource
+          import androidx.compose.foundation.interaction.collectIsPressedAsState
+          import androidx.compose.foundation.isSystemInDarkTheme
+          import androidx.compose.foundation.layout.Arrangement
+          import androidx.compose.foundation.layout.Box
+          import androidx.compose.foundation.layout.BoxWithConstraints
+          import androidx.compose.foundation.layout.Column
+          import androidx.compose.foundation.layout.Row
+          import androidx.compose.foundation.layout.fillMaxHeight
+          import androidx.compose.foundation.layout.fillMaxSize
+          import androidx.compose.foundation.layout.fillMaxWidth
+          import androidx.compose.foundation.layout.offset
+          import androidx.compose.foundation.layout.padding
+          import androidx.compose.foundation.layout.size
+          import androidx.compose.foundation.layout.systemBarsPadding
+          import androidx.compose.foundation.shape.CircleShape
+          import androidx.compose.foundation.shape.RoundedCornerShape
+          import androidx.compose.material.icons.Icons
+          import androidx.compose.material.icons.automirrored.filled.Backspace
+          import androidx.compose.material.icons.filled.DarkMode
+          import androidx.compose.material.icons.filled.LightMode
+          import androidx.compose.material3.Icon
+          import androidx.compose.material3.Text
+          import androidx.compose.runtime.Composable
+          import androidx.compose.runtime.SideEffect
+          import androidx.compose.runtime.getValue
+          import androidx.compose.runtime.mutableIntStateOf
+          import androidx.compose.runtime.mutableStateOf
+          import androidx.compose.runtime.remember
+          import androidx.compose.runtime.saveable.rememberSaveable
+          import androidx.compose.runtime.setValue
+          import androidx.compose.ui.Alignment
+          import androidx.compose.ui.Modifier
+          import androidx.compose.ui.draw.clip
+          import androidx.compose.ui.geometry.Offset
+          import androidx.compose.ui.graphics.Color
+          import androidx.compose.ui.platform.LocalContext
+          import androidx.compose.ui.platform.LocalView
+          import androidx.compose.ui.text.font.FontWeight
+          import androidx.compose.ui.unit.Dp
+          import androidx.compose.ui.unit.dp
+          import androidx.compose.ui.unit.sp
+          import androidx.core.view.WindowCompat
+
+          data class Palette(
+              val bg: Color,
+              val dot: Color,
+              val body: Color,
+              val bodyEdge: Color,
+              val bodyShadow: Color,
+              val display: Color,
+              val displayEdge: Color,
+              val key: Color,
+              val keyShadow: Color,
+              val keyEdge: Color,
+              val text: Color,
+              val subText: Color
+          )
+
+          val LightPalette = Palette(
+              bg = Color(0xFFD7EFF9),
+              dot = Color(0xFFC3E3F1),
+              body = Color(0xFFF58BAE),
+              bodyEdge = Color(0xFF2B1B2E),
+              bodyShadow = Color(0xFFC44B77),
+              display = Color(0xFFEAF8FF),
+              displayEdge = Color(0xFF2B1B2E),
+              key = Color(0xFFC5E9F9),
+              keyShadow = Color(0xFF4A8FB5),
+              keyEdge = Color(0xFF23324A),
+              text = Color(0xFF5B2A12),
+              subText = Color(0xFF8A5A3C)
+          )
+
+          val DarkPalette = Palette(
+              bg = Color(0xFF0E1726),
+              dot = Color(0xFF16243A),
+              body = Color(0xFF7A3555),
+              bodyEdge = Color(0xFF0A0A12),
+              bodyShadow = Color(0xFF4A1E34),
+              display = Color(0xFF0F1D2E),
+              displayEdge = Color(0xFF0A0A12),
+              key = Color(0xFF2B4560),
+              keyShadow = Color(0xFF14263A),
+              keyEdge = Color(0xFF0A0A12),
+              text = Color(0xFFFFE1EA),
+              subText = Color(0xFFA9B9CC)
+          )
+
+          private val KeyRows = listOf(
+              listOf("C", "±", "%", "÷"),
+              listOf("7", "8", "9", "×"),
+              listOf("4", "5", "6", "−"),
+              listOf("1", "2", "3", "+"),
+              listOf("⌫", "0", ".", "=")
+          )
+
+          @Composable
+          fun CalcRoot() {
+              val ctx = LocalContext.current
+              val prefs = remember { ctx.getSharedPreferences("calc", Context.MODE_PRIVATE) }
+              var mode by remember { mutableIntStateOf(prefs.getInt("theme", 0)) }
+              val sysDark = isSystemInDarkTheme()
+              val dark = when (mode) {
+                  1 -> false
+                  2 -> true
+                  else -> sysDark
+              }
+              val p = if (dark) DarkPalette else LightPalette
+
+              val view = LocalView.current
+              SideEffect {
+                  val w = (view.context as? Activity)?.window
+                  if (w != null) {
+                      val c = WindowCompat.getInsetsController(w, view)
+                      c.isAppearanceLightStatusBars = !dark
+                      c.isAppearanceLightNavigationBars = !dark
+                  }
+              }
+
+              var expr by rememberSaveable { mutableStateOf("") }
+              var last by rememberSaveable { mutableStateOf("") }
+              var done by rememberSaveable { mutableStateOf(false) }
+              val state = CalcState(expr, last, done)
+
+              val onKey: (String) -> Unit = { k ->
+                  val ns = Engine.press(CalcState(expr, last, done), k)
+                  expr = ns.expr
+                  last = ns.lastExpr
+                  done = ns.done
+              }
+
+              BoxWithConstraints(Modifier.fillMaxSize().background(p.bg)) {
+                  Canvas(Modifier.fillMaxSize()) {
+                      val step = 10.dp.toPx()
+                      val r = 1.1.dp.toPx()
+                      var y = step / 2
+                      while (y < size.height) {
+                          var x = step / 2
+                          while (x < size.width) {
+                              drawCircle(p.dot, r, Offset(x, y))
+                              x += step
+                          }
+                          y += step
+                      }
+                  }
+
+                  val land = maxWidth > maxHeight
+                  val ratio = if (land) 0.66f else 1.72f
+                  val marginV = if (land) 28.dp else 100.dp
+                  val avW = maxWidth - 32.dp
+                  val avH = maxHeight - marginV
+                  val cap = if (land) 640.dp else 460.dp
+                  val bodyW: Dp = minOf(minOf(avW, avH / ratio), cap)
+                  val bodyH: Dp = bodyW * ratio
+
+                  Box(Modifier.fillMaxSize().systemBarsPadding()) {
+                      Calculator(
+                          p = p,
+                          bodyW = bodyW,
+                          bodyH = bodyH,
+                          top = topText(state),
+                          big = bigText(state),
+                          onKey = onKey,
+                          modifier = Modifier.align(Alignment.Center)
+                      )
+                      Box(
+                          Modifier
+                              .align(Alignment.TopEnd)
+                              .padding(16.dp)
+                              .size(44.dp)
+                              .clip(CircleShape)
+                              .background(p.key)
+                              .border(2.dp, p.keyEdge, CircleShape)
+                              .clickable {
+                                  mode = if (dark) 1 else 2
+                                  prefs.edit().putInt("theme", mode).apply()
+                              },
+                          contentAlignment = Alignment.Center
+                      ) {
+                          Icon(
+                              if (dark) Icons.Filled.LightMode else Icons.Filled.DarkMode,
+                              contentDescription = "Switch theme",
+                              tint = p.text,
+                              modifier = Modifier.size(24.dp)
+                          )
+                      }
+                  }
+              }
+          }
+
+          @Composable
+          private fun Calculator(
+              p: Palette,
+              bodyW: Dp,
+              bodyH: Dp,
+              top: String,
+              big: String,
+              onKey: (String) -> Unit,
+              modifier: Modifier = Modifier
+          ) {
+              val corner = bodyW * 0.07f
+              val pad = bodyW * 0.06f
+              val gap = bodyW * 0.03f
+              val shape = RoundedCornerShape(corner)
+              val inner = RoundedCornerShape(bodyW * 0.04f)
+              val keyShape = RoundedCornerShape(bodyW * 0.035f)
+              val keyText = (bodyW.value * 0.075f).sp
+
+              Box(modifier.size(bodyW, bodyH)) {
+                  Box(
+                      Modifier
+                          .fillMaxSize()
+                          .padding(start = 5.dp, top = 7.dp)
+                          .clip(shape)
+                          .background(p.bodyShadow)
+                  )
+                  Box(
+                      Modifier
+                          .fillMaxSize()
+                          .padding(end = 5.dp, bottom = 7.dp)
+                          .clip(shape)
+                          .background(p.body)
+                          .border(2.5.dp, p.bodyEdge, shape)
+                  ) {
+                      Column(
+                          Modifier
+                              .fillMaxSize()
+                              .padding(pad),
+                          verticalArrangement = Arrangement.spacedBy(gap)
+                      ) {
+                          DisplayPanel(p, bodyW, inner, top, big, Modifier.weight(1.25f).fillMaxWidth())
+                          Column(
+                              Modifier
+                                  .weight(5f)
+                                  .fillMaxWidth(),
+                              verticalArrangement = Arrangement.spacedBy(gap)
+                          ) {
+                              KeyRows.forEach { row ->
+                                  Row(
+                                      Modifier
+                                          .weight(1f)
+                                          .fillMaxWidth(),
+                                      horizontalArrangement = Arrangement.spacedBy(gap)
+                                  ) {
+                                      row.forEach { k ->
+                                          CalcKey(
+                                              key = k,
+                                              p = p,
+                                              shape = keyShape,
+                                              textSize = keyText,
+                                              modifier = Modifier
+                                                  .weight(1f)
+                                                  .fillMaxHeight(),
+                                              onClick = { onKey(k) }
+                                          )
+                                      }
+                                  }
+                              }
+                          }
+                      }
+                  }
+              }
+          }
+
+          @Composable
+          private fun DisplayPanel(
+              p: Palette,
+              bodyW: Dp,
+              shape: RoundedCornerShape,
+              top: String,
+              big: String,
+              modifier: Modifier
+          ) {
+              val topShown = if (top.length > 26) "…" + top.takeLast(25) else top
+              val bigSize = when {
+                  big.length <= 9 -> 0.13f
+                  big.length <= 12 -> 0.10f
+                  big.length <= 15 -> 0.08f
+                  else -> 0.065f
+              }
+              Box(
+                  modifier
+                      .clip(shape)
+                      .background(p.display)
+                      .border(2.dp, p.displayEdge, shape)
+                      .padding(horizontal = bodyW * 0.05f, vertical = bodyW * 0.02f)
+              ) {
+                  Column(
+                      Modifier.fillMaxSize(),
+                      horizontalAlignment = Alignment.End,
+                      verticalArrangement = Arrangement.Center
+                  ) {
+                      Text(
+                          topShown,
+                          color = p.subText,
+                          fontSize = (bodyW.value * 0.045f).sp,
+                          fontWeight = FontWeight.Medium,
+                          maxLines = 1,
+                          softWrap = false
+                      )
+                      Text(
+                          big,
+                          color = p.text,
+                          fontSize = (bodyW.value * bigSize).sp,
+                          fontWeight = FontWeight.Bold,
+                          maxLines = 1,
+                          softWrap = false
+                      )
+                  }
+              }
+          }
+
+          @Composable
+          private fun CalcKey(
+              key: String,
+              p: Palette,
+              shape: RoundedCornerShape,
+              textSize: androidx.compose.ui.unit.TextUnit,
+              modifier: Modifier,
+              onClick: () -> Unit
+          ) {
+              val src = remember { MutableInteractionSource() }
+              val pressed by src.collectIsPressedAsState()
+              val dx by animateDpAsState(if (pressed) 3.dp else 0.dp, tween(60), label = "dx")
+              val dy by animateDpAsState(if (pressed) 4.dp else 0.dp, tween(60), label = "dy")
+
+              Box(modifier.clickable(interactionSource = src, indication = null, onClick = onClick)) {
+                  Box(
+                      Modifier
+                          .fillMaxSize()
+                          .padding(start = 3.dp, top = 4.dp)
+                          .clip(shape)
+                          .background(p.keyShadow)
+                  )
+                  Box(
+                      Modifier
+                          .fillMaxSize()
+                          .padding(end = 3.dp, bottom = 4.dp)
+                          .offset(dx, dy)
+                          .clip(shape)
+                          .background(p.key)
+                          .border(2.dp, p.keyEdge, shape),
+                      contentAlignment = Alignment.Center
+                  ) {
+                      if (key == "⌫") {
+                          Icon(
+                              Icons.AutoMirrored.Filled.Backspace,
+                              contentDescription = "Delete",
+                              tint = p.text,
+                              modifier = Modifier.size((textSize.value * 1.1f).dp)
+                          )
+                      } else {
+                          Text(
+                              if (key == "±") "+/−" else key,
+                              color = p.text,
+                              fontSize = textSize,
+                              fontWeight = FontWeight.Bold,
+                              maxLines = 1,
+                              softWrap = false
+                          )
+                      }
+                  }
+              }
+          }
+          KTEOF
+          mkdir -p app/src/main/java/com/eddefi/calc
+          cat > app/src/main/java/com/eddefi/calc/Engine.kt <<'KTEOF'
+          package com.eddefi.calc
+
+          import java.math.BigDecimal
+          import java.math.MathContext
+
+          data class CalcState(
+              val expr: String = "",
+              val lastExpr: String = "",
+              val done: Boolean = false
+          )
+
+          fun isOp(c: Char): Boolean = c == '+' || c == '−' || c == '×' || c == '÷'
+
+          private fun isUnaryAt(e: String, i: Int): Boolean = i == 0 || isOp(e[i - 1])
+
+          private fun numStart(e: String): Int {
+              var i = e.length
+              while (i > 0 && (e[i - 1].isDigit() || e[i - 1] == '.')) i--
+              return i
+          }
+
+          fun hasOperator(e: String): Boolean = e.drop(1).any { isOp(it) }
+
+          object Engine {
+
+              fun press(s: CalcState, key: String): CalcState = when (key) {
+                  "C" -> CalcState()
+                  "⌫" -> back(s)
+                  "±" -> negate(s)
+                  "%" -> percent(s)
+                  "=" -> evaluateKey(s)
+                  "+", "−", "×", "÷" -> op(s, key[0])
+                  "." -> dot(s)
+                  else -> digit(s, key[0])
+              }
+
+              private fun digit(s: CalcState, d: Char): CalcState {
+                  val base = if (s.done) "" else s.expr
+                  val start = numStart(base)
+                  val cur = base.substring(start)
+                  if (cur.count { it.isDigit() } >= 15) return s
+                  val next = if (cur == "0") base.substring(0, start) + d else base + d
+                  return CalcState(next)
+              }
+
+              private fun dot(s: CalcState): CalcState {
+                  val base = if (s.done) "" else s.expr
+                  val start = numStart(base)
+                  val cur = base.substring(start)
+                  if (cur.contains('.')) return s
+                  val next = if (cur.isEmpty()) base + "0." else base + "."
+                  return CalcState(next)
+              }
+
+              private fun op(s: CalcState, o: Char): CalcState {
+                  var e = if (s.expr == "Error") "" else s.expr
+                  if (e.isEmpty()) return if (o == '−') CalcState("−") else s
+                  if (e == "−") return s
+                  if (e.last() == '.') e = e.dropLast(1)
+                  if (isOp(e.last())) {
+                      val trimmed = e.dropLast(1)
+                      if (trimmed.isEmpty() || isOp(trimmed.last())) return CalcState(e)
+                      return CalcState(trimmed + o)
+                  }
+                  return CalcState(e + o)
+              }
+
+              private fun back(s: CalcState): CalcState {
+                  if (s.done) return CalcState()
+                  return CalcState(s.expr.dropLast(1))
+              }
+
+              private fun negate(s: CalcState): CalcState {
+                  val e = if (s.expr == "Error") "" else s.expr
+                  if (e.isEmpty()) return CalcState("−")
+                  val start = numStart(e)
+                  if (start == e.length) {
+                      val last = e.last()
+                      if (last == '−') {
+                          return if (isUnaryAt(e, e.length - 1)) CalcState(e.dropLast(1)) else CalcState(e)
+                      }
+                      return CalcState(e + "−")
+                  }
+                  val m = start - 1
+                  return if (m >= 0 && e[m] == '−' && isUnaryAt(e, m)) {
+                      CalcState(e.removeRange(m, m + 1))
+                  } else {
+                      CalcState(e.substring(0, start) + "−" + e.substring(start))
+                  }
+              }
+
+              private fun percent(s: CalcState): CalcState {
+                  val e = s.expr
+                  if (e.isEmpty() || e == "Error") return s
+                  val start = numStart(e)
+                  if (start == e.length) return s
+                  val num = e.substring(start).toDoubleOrNull() ?: return s
+                  return CalcState(e.substring(0, start) + fmt(num / 100.0))
+              }
+
+              private fun evaluateKey(s: CalcState): CalcState {
+                  if (s.done || s.expr.isEmpty() || s.expr == "Error") return s
+                  var e = s.expr
+                  while (e.isNotEmpty() && (isOp(e.last()) || e.last() == '.')) e = e.dropLast(1)
+                  if (e.isEmpty()) return s
+                  val r = evaluate(e) ?: return CalcState("Error", e, true)
+                  return CalcState(r, e, true)
+              }
+          }
+
+          fun evaluate(e: String): String? {
+              val nums = ArrayList<Double>()
+              val ops = ArrayList<Char>()
+              var i = 0
+              while (i < e.length) {
+                  var neg = false
+                  if (e[i] == '−') {
+                      neg = true
+                      i++
+                  }
+                  val st = i
+                  while (i < e.length && (e[i].isDigit() || e[i] == '.')) i++
+                  if (st == i) return null
+                  val n = e.substring(st, i).toDoubleOrNull() ?: return null
+                  nums.add(if (neg) -n else n)
+                  if (i < e.length) {
+                      val o = e[i]
+                      if (!isOp(o)) return null
+                      ops.add(o)
+                      i++
+                  }
+              }
+              if (nums.size != ops.size + 1) return null
+
+              val n2 = ArrayList<Double>()
+              val o2 = ArrayList<Char>()
+              n2.add(nums[0])
+              for (k in ops.indices) {
+                  val o = ops[k]
+                  val v = nums[k + 1]
+                  when (o) {
+                      '×' -> n2[n2.size - 1] = n2[n2.size - 1] * v
+                      '÷' -> {
+                          if (v == 0.0) return null
+                          n2[n2.size - 1] = n2[n2.size - 1] / v
+                      }
+                      else -> {
+                          o2.add(o)
+                          n2.add(v)
+                      }
+                  }
+              }
+              var acc = n2[0]
+              for (k in o2.indices) {
+                  acc = if (o2[k] == '+') acc + n2[k + 1] else acc - n2[k + 1]
+              }
+              if (acc.isNaN() || acc.isInfinite()) return null
+              return fmt(acc)
+          }
+
+          fun fmt(d: Double): String {
+              if (d == 0.0) return "0"
+              val s = BigDecimal(d).round(MathContext(12)).stripTrailingZeros().toPlainString()
+              return s.replace('-', '−')
+          }
+
+          fun group(s: String): String {
+              var sign = ""
+              var body = s
+              if (body.startsWith("−")) {
+                  sign = "−"
+                  body = body.drop(1)
+              }
+              val parts = body.split('.', limit = 2)
+              val ip = parts[0].reversed().chunked(3).joinToString(",").reversed()
+              val frac = if (parts.size > 1) "." + parts[1] else ""
+              return sign + ip + frac
+          }
+
+          fun pretty(e: String): String {
+              val sb = StringBuilder()
+              for (i in e.indices) {
+                  val c = e[i]
+                  val unary = c == '−' && (i == 0 || isOp(e[i - 1]))
+                  if (isOp(c) && !unary) {
+                      sb.append(' ').append(c).append(' ')
+                  } else {
+                      sb.append(c)
+                  }
+              }
+              return sb.toString()
+          }
+
+          fun topText(s: CalcState): String {
+              if (s.done) return if (s.lastExpr.isEmpty()) "" else pretty(s.lastExpr) + " ="
+              return if (hasOperator(s.expr)) pretty(s.expr) else ""
+          }
+
+          fun bigText(s: CalcState): String {
+              if (s.expr == "Error") return "Error"
+              if (s.done) return group(s.expr)
+              val e = s.expr
+              if (e.isEmpty()) return "0"
+              if (!hasOperator(e)) return group(e)
+              var t = e
+              while (t.isNotEmpty() && (isOp(t.last()) || t.last() == '.')) t = t.dropLast(1)
+              if (t.isEmpty()) return "0"
+              val r = evaluate(t) ?: return "Error"
+              return group(r)
+          }
+          KTEOF
+          mkdir -p app/src/main/java/com/eddefi/calc
+          cat > app/src/main/java/com/eddefi/calc/MainActivity.kt <<'KTEOF'
+          package com.eddefi.calc
+
+          import android.os.Bundle
+          import androidx.activity.ComponentActivity
+          import androidx.activity.compose.setContent
+          import androidx.activity.enableEdgeToEdge
+
+          class MainActivity : ComponentActivity() {
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  enableEdgeToEdge()
+                  super.onCreate(savedInstanceState)
+                  setContent { CalcRoot() }
+              }
+          }
+          KTEOF
+          mkdir -p app/src/main/res/drawable
+          cat > app/src/main/res/drawable/ic_launcher_foreground.xml <<'KTEOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+              android:width="108dp"
+              android:height="108dp"
+              android:viewportWidth="108"
+              android:viewportHeight="108">
+              <path android:fillColor="#FFC44B77" android:pathData="M41,26 h30 a7,7 0 0 1 7,7 v46 a7,7 0 0 1 -7,7 h-30 a7,7 0 0 1 -7,-7 v-46 a7,7 0 0 1 7,-7 z" />
+              <path android:fillColor="#FFF58BAE" android:pathData="M39,24 h30 a7,7 0 0 1 7,7 v46 a7,7 0 0 1 -7,7 h-30 a7,7 0 0 1 -7,-7 v-46 a7,7 0 0 1 7,-7 z" />
+              <path android:fillColor="#FFEAF8FF" android:pathData="M40,29 h28 a3,3 0 0 1 3,3 v6 a3,3 0 0 1 -3,3 h-28 a3,3 0 0 1 -3,-3 v-6 a3,3 0 0 1 3,-3 z" />
+              <path android:fillColor="#FFC5E9F9" android:pathData="M38.6,46.0 h3.3 a1.6,1.6 0 0 1 1.6,1.6 v3.3 a1.6,1.6 0 0 1 -1.6,1.6 h-3.3 a1.6,1.6 0 0 1 -1.6,-1.6 v-3.3 a1.6,1.6 0 0 1 1.6,-1.6 z" />
+              <path android:fillColor="#FFC5E9F9" android:pathData="M47.1,46.0 h3.3 a1.6,1.6 0 0 1 1.6,1.6 v3.3 a1.6,1.6 0 0 1 -1.6,1.6 h-3.3 a1.6,1.6 0 0 1 -1.6,-1.6 v-3.3 a1.6,1.6 0 0 1 1.6,-1.6 z" />
+              <path android:fillColor="#FFC5E9F9" android:pathData="M55.6,46.0 h3.3 a1.6,1.6 0 0 1 1.6,1.6 v3.3 a1.6,1.6 0 0 1 -1.6,1.6 h-3.3 a1.6,1.6 0 0 1 -1.6,-1.6 v-3.3 a1.6,1.6 0 0 1 1.6,-1.6 z" />
+              <path android:fillColor="#FFC5E9F9" android:pathData="M64.1,46.0 h3.3 a1.6,1.6 0 0 1 1.6,1.6 v3.3 a1.6,1.6 0 0 1 -1.6,1.6 h-3.3 a1.6,1.6 0 0 1 -1.6,-1.6 v-3.3 a1.6,1.6 0 0 1 1.6,-1.6 z" />
+              <path android:fillColor="#FFC5E9F9" android:pathData="M38.6,54.5 h3.3 a1.6,1.6 0 0 1 1.6,1.6 v3.3 a1.6,1.6 0 0 1 -1.6,1.6 h-3.3 a1.6,1.6 0 0 1 -1.6,-1.6 v-3.3 a1.6,1.6 0 0 1 1.6,-1.6 z" />
+              <path android:fillColor="#FFC5E9F9" android:pathData="M47.1,54.5 h3.3 a1.6,1.6 0 0 1 1.6,1.6 v3.3 a1.6,1.6 0 0 1 -1.6,1.6 h-3.3 a1.6,1.6 0 0 1 -1.6,-1.6 v-3.3 a1.6,1.6 0 0 1 1.6,-1.6 z" />
+              <path android:fillColor="#FFC5E9F9" android:pathData="M55.6,54.5 h3.3 a1.6,1.6 0 0 1 1.6,1.6 v3.3 a1.6,1.6 0 0 1 -1.6,1.6 h-3.3 a1.6,1.6 0 0 1 -1.6,-1.6 v-3.3 a1.6,1.6 0 0 1 1.6,-1.6 z" />
+              <path android:fillColor="#FFC5E9F9" android:pathData="M64.1,54.5 h3.3 a1.6,1.6 0 0 1 1.6,1.6 v3.3 a1.6,1.6 0 0 1 -1.6,1.6 h-3.3 a1.6,1.6 0 0 1 -1.6,-1.6 v-3.3 a1.6,1.6 0 0 1 1.6,-1.6 z" />
+              <path android:fillColor="#FFC5E9F9" android:pathData="M38.6,63.0 h3.3 a1.6,1.6 0 0 1 1.6,1.6 v3.3 a1.6,1.6 0 0 1 -1.6,1.6 h-3.3 a1.6,1.6 0 0 1 -1.6,-1.6 v-3.3 a1.6,1.6 0 0 1 1.6,-1.6 z" />
+              <path android:fillColor="#FFC5E9F9" android:pathData="M47.1,63.0 h3.3 a1.6,1.6 0 0 1 1.6,1.6 v3.3 a1.6,1.6 0 0 1 -1.6,1.6 h-3.3 a1.6,1.6 0 0 1 -1.6,-1.6 v-3.3 a1.6,1.6 0 0 1 1.6,-1.6 z" />
+              <path android:fillColor="#FFC5E9F9" android:pathData="M55.6,63.0 h3.3 a1.6,1.6 0 0 1 1.6,1.6 v3.3 a1.6,1.6 0 0 1 -1.6,1.6 h-3.3 a1.6,1.6 0 0 1 -1.6,-1.6 v-3.3 a1.6,1.6 0 0 1 1.6,-1.6 z" />
+              <path android:fillColor="#FFC5E9F9" android:pathData="M64.1,63.0 h3.3 a1.6,1.6 0 0 1 1.6,1.6 v3.3 a1.6,1.6 0 0 1 -1.6,1.6 h-3.3 a1.6,1.6 0 0 1 -1.6,-1.6 v-3.3 a1.6,1.6 0 0 1 1.6,-1.6 z" />
+              <path android:fillColor="#FFC5E9F9" android:pathData="M38.6,71.5 h3.3 a1.6,1.6 0 0 1 1.6,1.6 v3.3 a1.6,1.6 0 0 1 -1.6,1.6 h-3.3 a1.6,1.6 0 0 1 -1.6,-1.6 v-3.3 a1.6,1.6 0 0 1 1.6,-1.6 z" />
+              <path android:fillColor="#FFC5E9F9" android:pathData="M47.1,71.5 h3.3 a1.6,1.6 0 0 1 1.6,1.6 v3.3 a1.6,1.6 0 0 1 -1.6,1.6 h-3.3 a1.6,1.6 0 0 1 -1.6,-1.6 v-3.3 a1.6,1.6 0 0 1 1.6,-1.6 z" />
+              <path android:fillColor="#FFC5E9F9" android:pathData="M55.6,71.5 h3.3 a1.6,1.6 0 0 1 1.6,1.6 v3.3 a1.6,1.6 0 0 1 -1.6,1.6 h-3.3 a1.6,1.6 0 0 1 -1.6,-1.6 v-3.3 a1.6,1.6 0 0 1 1.6,-1.6 z" />
+              <path android:fillColor="#FFC5E9F9" android:pathData="M64.1,71.5 h3.3 a1.6,1.6 0 0 1 1.6,1.6 v3.3 a1.6,1.6 0 0 1 -1.6,1.6 h-3.3 a1.6,1.6 0 0 1 -1.6,-1.6 v-3.3 a1.6,1.6 0 0 1 1.6,-1.6 z" />
+          </vector>
+          KTEOF
+          mkdir -p app/src/main/res/mipmap-anydpi-v26
+          cat > app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml <<'KTEOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+              <background android:drawable="@color/ic_bg" />
+              <foreground android:drawable="@drawable/ic_launcher_foreground" />
+          </adaptive-icon>
+          KTEOF
+          mkdir -p app/src/main/res/values-night
+          cat > app/src/main/res/values-night/colors.xml <<'KTEOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources>
+              <color name="win_bg">#FF0E1726</color>
+          </resources>
+          KTEOF
+          mkdir -p app/src/main/res/values-night
+          cat > app/src/main/res/values-night/themes.xml <<'KTEOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources>
+              <style name="AppTheme" parent="android:Theme.Material.NoActionBar">
+                  <item name="android:windowBackground">@color/win_bg</item>
+                  <item name="android:statusBarColor">@android:color/transparent</item>
+                  <item name="android:navigationBarColor">@android:color/transparent</item>
+              </style>
+          </resources>
+          KTEOF
+          mkdir -p app/src/main/res/values
+          cat > app/src/main/res/values/colors.xml <<'KTEOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources>
+              <color name="win_bg">#FFD7EFF9</color>
+              <color name="ic_bg">#FFD7EFF9</color>
+          </resources>
+          KTEOF
+          mkdir -p app/src/main/res/values
+          cat > app/src/main/res/values/themes.xml <<'KTEOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources>
+              <style name="AppTheme" parent="android:Theme.Material.Light.NoActionBar">
+                  <item name="android:windowBackground">@color/win_bg</item>
+                  <item name="android:statusBarColor">@android:color/transparent</item>
+                  <item name="android:navigationBarColor">@android:color/transparent</item>
+              </style>
+          </resources>
+          KTEOF
+          cat > build.gradle.kts <<'KTEOF'
+          plugins {
+              id("com.android.application") version "8.5.2" apply false
+              id("org.jetbrains.kotlin.android") version "1.9.24" apply false
+          }
+          KTEOF
+          cat > gradle.properties <<'KTEOF'
+          org.gradle.jvmargs=-Xmx2048m
+          android.useAndroidX=true
+          kotlin.code.style=official
+          KTEOF
+          cat > settings.gradle.kts <<'KTEOF'
+          pluginManagement {
+              repositories { google(); mavenCentral(); gradlePluginPortal() }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories { google(); mavenCentral() }
+          }
+          rootProject.name = "PocketCalc"
+          include(":app")
+          KTEOF
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - name: Accept Android licenses
+        run: |
+          mkdir -p "$ANDROID_HOME/licenses"
+          printf "\n24333f8a63b6825ea9c5514f83c2829b004d1fee" > "$ANDROID_HOME/licenses/android-sdk-license"
+          printf "\n8933bad161af4178b1185d1a37fbf41ea5269c55\nd56f5187479451eabf01fb78af6dfcb131a6481e\n24333f8a63b6825ea9c5514f83c2829b004d1fee" >> "$ANDROID_HOME/licenses/android-sdk-license"
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.7
+      - run: gradle assembleDebug
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PocketCalc-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
